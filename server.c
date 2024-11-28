@@ -57,7 +57,7 @@ void *handle_client(void *arg) {
       perror("Error sending data to client");
       break;
     }
-    usleep(50000);  // Simulate video frame delay
+    sleep(0.5);  // Simulate video frame delay
   }
 
   printf("Finished sending frames to client.\n");

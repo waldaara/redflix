@@ -42,7 +42,7 @@ void receive_video(int server_socket, int bitrate) {
     }
     printf("Received frame: %c\n",
            video_frame);  // Display the frame (could be processed differently)
-    usleep(50000);        // Simulate video playback delay
+    sleep(0.5);           // Simulate video playback delay
   }
 
   printf("Finished receiving frames.\n");
