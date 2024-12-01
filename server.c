@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #define DEFAULT_PORT 8080
@@ -24,44 +25,90 @@ const char *video_data = "1234567890123456789012345678901234567890";
 // Function to handle client communication
 void *handle_client(void *arg) {
   client_data_t *client_data = (client_data_t *)arg;
+
   if (client_data == NULL) {
     fprintf(stderr, "Error: Invalid client data\n");
-    return NULL;
+    exit(EXIT_FAILURE);
   }
 
   int client_socket = client_data->client_socket;
   int bitrate = client_data->bitrate;
+
   free(client_data);
 
-  printf("Connection established with client, bitrate: %d\n", bitrate);
+  printf("Connection established with client %d, bitrate: %d\n", client_socket,
+         bitrate);
 
-  int frames_to_send = 0;
+  int frames_to_skip;
   switch (bitrate) {
     case LOW_DEFINITION:
-      frames_to_send = 10;
+      frames_to_skip = 100;
       break;
     case MEDIUM_DEFINITION:
-      frames_to_send = 100;
+      frames_to_skip = 10;
       break;
     case HIGH_DEFINITION:
-      frames_to_send = 1000;
-      break;
     default:
-      frames_to_send = 10;
+      frames_to_skip = 1;
       break;
   }
 
-  // Send video frames to client
-  for (int i = 0; i < frames_to_send; ++i) {
-    if (send(client_socket, &video_data[i % strlen(video_data)], 1, 0) == -1) {
-      perror("Error sending data to client");
-      break;
+  FILE *file = fopen("video.txt", "r");
+  if (!file) {
+    perror("Error abriendo archivo de video");
+    exit(EXIT_FAILURE);
+  }
+
+  char buffer[BUFFER_SIZE] = "";
+  char temp[32];
+  int frames_in_buffer = 0;
+  int number;
+
+  while (fscanf(file, "%d", &number) == 1) {
+    static int current_frame = 0;  // Contador para controlar el salto de frames
+
+    // Solo procesar el frame si cumple con el criterio
+    if (current_frame % frames_to_skip == 0) {
+      snprintf(temp, sizeof(temp), "%d ", number);
+      strncat(buffer, temp, sizeof(buffer) - strlen(buffer) - 1);
+      frames_in_buffer++;
     }
-    sleep(0.5);  // Simulate video frame delay
+
+    current_frame++;  // Incrementar el contador de frames
+
+    // Enviar cuando el buffer tiene 30 frames
+    if (frames_in_buffer == 30) {
+      buffer[strlen(buffer)] = '\0';  // Asegurar terminación del string
+
+      if (send(client_socket, buffer, strlen(buffer), 0) == -1) {
+        perror("Error enviando frames al cliente");
+        break;
+      }
+
+      memset(buffer, 0, sizeof(buffer));  // Limpiar el buffer
+      frames_in_buffer = 0;
+      usleep(1 * 1000 * 1000);  // Pausa de 1 segundo entre envíos
+    }
   }
 
-  printf("Finished sending frames to client.\n");
+  // Enviar cualquier frame restante en el buffer
+  if (frames_in_buffer > 0) {
+    buffer[strlen(buffer)] = '\0';
+
+    if (send(client_socket, buffer, strlen(buffer), 0) == -1) {
+      perror("Error enviando último grupo de frames");
+    }
+
+    memset(buffer, 0,
+           sizeof(buffer));  // Limpiar el buffer después del envío final
+  }
+
+  fclose(file);
+
+  printf("Terminado el envío de frames al cliente.\n");
+
   close(client_socket);
+
   return NULL;
 }
 
@@ -110,14 +157,24 @@ void start_server(int port) {
     }
 
     int bitrate;
-    if (recv(new_client_socket, &bitrate, sizeof(bitrate), 0) <= 0) {
+
+    int bytes_read = recv(new_client_socket, &bitrate, sizeof(bitrate), 0);
+
+    if (bytes_read == -1) {
       perror("Error receiving bitrate from client");
       close(new_client_socket);
-      continue;  // Continue listening for other clients
+      continue;
+    }
+
+    if (bytes_read == 0) {
+      printf("Client %d disconnected", new_client_socket);
+      close(new_client_socket);
+      continue;
     }
 
     // Allocate memory for client data
     client_data_t *client_data = malloc(sizeof(client_data_t));
+
     if (client_data == NULL) {
       perror("Error allocating memory for client data");
       close(new_client_socket);
@@ -129,6 +186,7 @@ void start_server(int port) {
 
     // Create a new thread to handle the client
     pthread_t client_thread;
+
     if (pthread_create(&client_thread, NULL, handle_client, client_data) != 0) {
       perror("Error creating thread for client");
       free(client_data);  // Free memory if thread creation fails
@@ -143,28 +201,31 @@ void start_server(int port) {
   close(server_socket);
 }
 
-// Main entry point of the program
 int main(int argc, char *argv[]) {
   int port = DEFAULT_PORT;
   int opt;
 
-  // Parse command-line options
   while ((opt = getopt(argc, argv, "p:")) != -1) {
     switch (opt) {
       case 'p':
         port = atoi(optarg);
+
         if (port <= 0) {
           fprintf(stderr, "Error: 'p' must be a positive integer.\n");
+
           return EXIT_FAILURE;
         }
+
         break;
+
       default:
         fprintf(stderr, "Usage: %s -p <port>\n", argv[0]);
+
         return EXIT_FAILURE;
     }
   }
 
-  // Start the server with the chosen port
   start_server(port);
+
   return EXIT_SUCCESS;
 }
