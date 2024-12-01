@@ -20,7 +20,17 @@ typedef struct {
   int bitrate;  // 1: LD, 2: MD, 3: HD
 } client_data_t;
 
-const char *video_data = "1234567890123456789012345678901234567890";
+void *encoder(void *arg) {
+  client_data_t *client_data = (client_data_t *)arg;
+
+  if (client_data == NULL) {
+    fprintf(stderr, "Error: Invalid client data\n");
+    exit(EXIT_FAILURE);
+  }
+
+  int client_socket = client_data->client_socket;
+  int bitrate = client_data->bitrate;
+}
 
 // Function to handle client communication
 void *handle_client(void *arg) {
@@ -33,8 +43,6 @@ void *handle_client(void *arg) {
 
   int client_socket = client_data->client_socket;
   int bitrate = client_data->bitrate;
-
-  free(client_data);
 
   printf("Connection established with client %d, bitrate: %d\n", client_socket,
          bitrate);

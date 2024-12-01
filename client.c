@@ -18,12 +18,18 @@ typedef struct {
   int client_socket;
 } client_data_t;
 
+void show_menu() {
+  printf("\nSelect an action:\n");
+  printf("1. Play\n");
+  printf("2. Pause\n");
+  printf("3. Stop\n");
+}
+
 void *handle_user_actions(void *arg) {
   client_data_t *client_data = (client_data_t *)arg;
 
   if (client_data == NULL) {
     fprintf(stderr, "Error: Invalid client data\n");
-
     exit(EXIT_FAILURE);
   }
 
@@ -34,23 +40,26 @@ void *handle_user_actions(void *arg) {
     fgets(buffer, sizeof(buffer), stdin);
     buffer[strcspn(buffer, "\n")] = 0;  // Remove the line break
 
-    // Check for empty input
-    while (strlen(buffer) == 0) {
-      fgets(buffer, sizeof(buffer), stdin);
-      buffer[strcspn(buffer, "\n")] = 0;  // Remove the line break
-    }
-
-    if (strcasecmp(buffer, "exit") == 0) {
+    if (strcasecmp(buffer, "1") == 0) {
+      if (send(client_socket, "play", 4, 0) == -1) {
+        perror("Error sending play command to server");
+      }
+    } else if (strcasecmp(buffer, "2") == 0) {
+      if (send(client_socket, "pause", 5, 0) == -1) {
+        perror("Error sending pause command to server");
+      }
+    } else if (strcasecmp(buffer, "3") == 0) {
       close(client_socket);
       exit(EXIT_SUCCESS);
+    } else {
+      printf("Invalid choice. Please choose a valid action.\n");
     }
 
-    if (send(client_socket, &buffer, sizeof(buffer), 0) == -1) {
-      perror("Error sending data to server");
-      close(client_socket);
-      exit(EXIT_FAILURE);
-    }
+    memset(buffer, 0, sizeof(buffer));
   }
+
+  close(client_socket);
+  return NULL;
 }
 
 void *handle_streaming(void *arg) {
@@ -58,7 +67,6 @@ void *handle_streaming(void *arg) {
 
   if (client_data == NULL) {
     fprintf(stderr, "Error: Invalid client data\n");
-
     exit(EXIT_FAILURE);
   }
 
@@ -68,7 +76,7 @@ void *handle_streaming(void *arg) {
   printf("Client socket %d\n", client_socket);
 
   while (1) {
-    int bytes_read = recv(client_socket, &buffer, sizeof(buffer), 0);
+    int bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
 
     if (bytes_read == -1) {
       perror("Error receiving data");
@@ -77,14 +85,14 @@ void *handle_streaming(void *arg) {
 
     if (bytes_read == 0) {
       printf("Finished receiving frames.\n");
-
       close(client_socket);
       exit(EXIT_SUCCESS);
     }
 
     printf("\n%s\n", buffer);
-
     memset(buffer, 0, sizeof(buffer));
+
+    show_menu();
   }
 
   return NULL;
@@ -96,7 +104,6 @@ int connect_to_server(const char *server_ip, int server_port) {
 
   // Create the socket
   client_socket = socket(AF_INET, SOCK_STREAM, 0);
-
   if (client_socket < 0) {
     perror("Error creating socket");
     exit(EXIT_FAILURE);
@@ -136,35 +143,25 @@ int main(int argc, char *argv[]) {
       case 'i':  // Server IP
         server_ip = optarg;
         break;
-
       case 'p':  // Server port
         server_port = atoi(optarg);
-
         if (server_port <= 0) {
           fprintf(stderr, "Error: Port must be a non-negative integer.\n");
-
           return EXIT_FAILURE;
         }
-
         break;
-
       case 'b':  // Bitrate
         bitrate = atoi(optarg);
-
         if (bitrate < LOW_DEFINITION || bitrate > HIGH_DEFINITION) {
           fprintf(stderr,
                   "Error: Invalid bitrate. Choose between 1 (LD), 2 (MD), or 3 "
                   "(HD).\n");
-
           return EXIT_FAILURE;
         }
-
         break;
-
       default:
         fprintf(stderr, "Usage: %s -i <server_ip> -p <port> -b <bitrate>\n",
                 argv[0]);
-
         return EXIT_FAILURE;
     }
   }
@@ -175,29 +172,27 @@ int main(int argc, char *argv[]) {
   if (send(client_socket, &bitrate, sizeof(bitrate), 0) == -1) {
     perror("Error sending bitrate to server");
     close(client_socket);
-
     return EXIT_FAILURE;
   }
 
-  pthread_t user_actions_thread, streaming_thread;
-
   // Allocate memory for client data
   client_data_t *client_data = malloc(sizeof(client_data_t));
-
   if (client_data == NULL) {
     perror("Error allocating memory for client data");
     close(client_socket);
-
     return EXIT_FAILURE;
   }
 
   client_data->client_socket = client_socket;
 
+  pthread_t user_actions_thread, streaming_thread;
+
+  // Create threads for user actions and streaming
   if (pthread_create(&user_actions_thread, NULL, handle_user_actions,
                      client_data) != 0) {
     perror("Error creating thread for user actions");
     close(client_socket);
-
+    free(client_data);
     return EXIT_FAILURE;
   }
 
@@ -205,7 +200,7 @@ int main(int argc, char *argv[]) {
       0) {
     perror("Error creating thread for streaming");
     close(client_socket);
-
+    free(client_data);
     return EXIT_FAILURE;
   }
 
