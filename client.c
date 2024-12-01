@@ -17,6 +17,7 @@
 typedef struct {
   int client_socket;
   char bitrate[3];  // To store the bitrate text (LD, MD, or HD)
+  int stop_thread;  // Flag to indicate when to stop the threads
 } client_data_t;
 
 void show_menu(const char *bitrate) {
@@ -54,8 +55,11 @@ void *handle_user_actions(void *arg) {
         perror("Error sending pause command to server");
       }
     } else if (strcasecmp(buffer, "3") == 0) {
-      close(client_socket);
-      exit(EXIT_SUCCESS);
+      if (send(client_socket, "stop", 4, 0) == -1) {
+        perror("Error sending stop command to server");
+      }
+      client_data->stop_thread = 1;  // Set the flag to stop both threads
+      break;                         // Exit the loop
     } else if (strcasecmp(buffer, "4") == 0) {
       strcpy(client_data->bitrate, LOW_DEFINITION);
       printf("Bitrate set to Low Definition (LD)\n");
@@ -82,6 +86,7 @@ void *handle_user_actions(void *arg) {
   }
 
   close(client_socket);
+
   return NULL;
 }
 
@@ -99,6 +104,12 @@ void *handle_streaming(void *arg) {
   printf("Client socket %d\n", client_socket);
 
   while (1) {
+    // Check if stop flag is set
+    if (client_data->stop_thread) {
+      printf("Stopping streaming...\n");
+      break;
+    }
+
     int bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
 
     if (bytes_read == -1) {
@@ -108,8 +119,7 @@ void *handle_streaming(void *arg) {
 
     if (bytes_read == 0) {
       printf("Finished receiving frames.\n");
-      close(client_socket);
-      exit(EXIT_SUCCESS);
+      break;  // Exit if the server closes the connection
     }
 
     printf("\n%s\n", buffer);
@@ -117,6 +127,8 @@ void *handle_streaming(void *arg) {
 
     show_menu(client_data->bitrate);
   }
+
+  close(client_socket);
 
   return NULL;
 }
@@ -200,6 +212,7 @@ int main(int argc, char *argv[]) {
 
   client_data->client_socket = client_socket;
   strcpy(client_data->bitrate, bitrate);  // Set initial bitrate to LD
+  client_data->stop_thread = 0;           // Initialize stop flag
 
   pthread_t user_actions_thread, streaming_thread;
 

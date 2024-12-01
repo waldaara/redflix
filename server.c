@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <bits/getopt_core.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +32,6 @@ void *handle_streaming(void *arg) {
   }
 
   int client_socket = client_data->client_socket;
-  int frames_to_skip = 0;
   FILE *file = fopen("video.txt", "r");
   if (!file) {
     perror("Error opening video file");
@@ -42,9 +42,11 @@ void *handle_streaming(void *arg) {
   char temp[32];
   int frames_in_buffer = 0;
   int number;
+  int frames_to_skip = 0;  // Initialize here
 
   while (fscanf(file, "%d", &number) == 1) {
-    // Adjust frame skipping based on bitrate
+    // Check bitrate each loop iteration (to detect changes)
+    pthread_mutex_lock(&client_data->mutex);
     if (strcmp(client_data->bitrate, LOW_DEFINITION) == 0) {
       frames_to_skip = 100;
     } else if (strcmp(client_data->bitrate, MEDIUM_DEFINITION) == 0) {
@@ -52,8 +54,9 @@ void *handle_streaming(void *arg) {
     } else if (strcmp(client_data->bitrate, HIGH_DEFINITION) == 0) {
       frames_to_skip = 1;
     }
+    pthread_mutex_unlock(&client_data->mutex);
 
-    // Skip frames based on bitrate setting
+    // Skip frames based on the current bitrate setting
     if (client_data->current_frame % frames_to_skip == 0) {
       snprintf(temp, sizeof(temp), "%d ", number);
       strncat(buffer, temp, sizeof(buffer) - strlen(buffer) - 1);
@@ -102,7 +105,7 @@ void *handle_streaming(void *arg) {
   return NULL;
 }
 
-// Function to listen for client commands (pause/play)
+// Function to listen for client commands (pause/play and bitrate changes)
 void *listen_commands(void *arg) {
   client_data_t *client_data = (client_data_t *)arg;
   if (client_data == NULL) {
@@ -115,14 +118,20 @@ void *listen_commands(void *arg) {
   while (1) {
     int bytes_received =
         recv(client_data->client_socket, command, sizeof(command), 0);
-    if (bytes_received <= 0) {
+
+    if (bytes_received == 0) {
+      printf("Client %d disconnected\n", client_data->client_socket);
+      return NULL;  // Client disconnected, stop listening for commands
+    }
+
+    if (bytes_received < 0) {
       perror("Error receiving command from client");
       break;
     }
 
     command[bytes_received] = '\0';  // Null-terminate the command string
 
-    // Handle "pause" and "play" commands
+    // Handle "pause", "play", and bitrate commands ("HD", "MD", "LD")
     if (strcasecmp(command, "pause") == 0) {
       pthread_mutex_lock(&client_data->mutex);
       client_data->pause_streaming = 1;  // Pause streaming
@@ -136,6 +145,24 @@ void *listen_commands(void *arg) {
       pthread_cond_signal(&client_data->cond);  // Wake up the streaming thread
       pthread_mutex_unlock(&client_data->mutex);
       printf("Received 'play' command.\n");
+    } else if (strcasecmp(command, "HD") == 0) {
+      pthread_mutex_lock(&client_data->mutex);
+      strcpy(client_data->bitrate, HIGH_DEFINITION);  // Set bitrate to HD
+      pthread_cond_signal(&client_data->cond);        // Notify streaming thread
+      pthread_mutex_unlock(&client_data->mutex);
+      printf("Received 'HD' command. Bitrate set to High Definition.\n");
+    } else if (strcasecmp(command, "MD") == 0) {
+      pthread_mutex_lock(&client_data->mutex);
+      strcpy(client_data->bitrate, MEDIUM_DEFINITION);  // Set bitrate to MD
+      pthread_cond_signal(&client_data->cond);  // Notify streaming thread
+      pthread_mutex_unlock(&client_data->mutex);
+      printf("Received 'MD' command. Bitrate set to Medium Definition.\n");
+    } else if (strcasecmp(command, "LD") == 0) {
+      pthread_mutex_lock(&client_data->mutex);
+      strcpy(client_data->bitrate, LOW_DEFINITION);  // Set bitrate to LD
+      pthread_cond_signal(&client_data->cond);       // Notify streaming thread
+      pthread_mutex_unlock(&client_data->mutex);
+      printf("Received 'LD' command. Bitrate set to Low Definition.\n");
     }
   }
 
@@ -192,13 +219,13 @@ void start_server(int port) {
     if (bytes_read == -1) {
       perror("Error receiving bitrate from client");
       close(new_client_socket);
-      continue;
+      continue;  // Continue listening for other clients
     }
 
     if (bytes_read == 0) {
-      printf("Client %d disconnected", new_client_socket);
+      printf("Client %d disconnected\n", new_client_socket);
       close(new_client_socket);
-      continue;
+      continue;  // Continue listening for other clients
     }
 
     // Allocate memory for client data
@@ -216,28 +243,19 @@ void start_server(int port) {
     pthread_mutex_init(&client_data->mutex, NULL);
     pthread_cond_init(&client_data->cond, NULL);
 
-    // Create threads for streaming and command listening
-    pthread_t streaming_thread, command_thread;
+    // Create threads to handle client commands and streaming
+    pthread_t command_thread, streaming_thread;
+    pthread_create(&command_thread, NULL, listen_commands, (void *)client_data);
+    pthread_create(&streaming_thread, NULL, handle_streaming,
+                   (void *)client_data);
 
-    if (pthread_create(&streaming_thread, NULL, handle_streaming,
-                       client_data) != 0) {
-      perror("Error creating streaming thread");
-      free(client_data);
-      close(new_client_socket);
-      continue;  // Continue listening for other clients
-    }
+    // Wait for threads to finish
+    pthread_join(command_thread, NULL);
+    pthread_join(streaming_thread, NULL);
 
-    if (pthread_create(&command_thread, NULL, listen_commands, client_data) !=
-        0) {
-      perror("Error creating command listening thread");
-      free(client_data);
-      close(new_client_socket);
-      continue;  // Continue listening for other clients
-    }
-
-    // Detach threads to allow automatic resource cleanup after they finish
-    pthread_detach(streaming_thread);
-    pthread_detach(command_thread);
+    // Clean up and close client socket
+    free(client_data);
+    close(new_client_socket);
   }
 
   close(server_socket);
