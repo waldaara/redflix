@@ -10,19 +10,24 @@
 #define DEFAULT_SERVER_PORT 8080
 #define BUFFER_SIZE 1024
 
-#define LOW_DEFINITION 1
-#define MEDIUM_DEFINITION 2
-#define HIGH_DEFINITION 3
+#define LOW_DEFINITION "LD"
+#define MEDIUM_DEFINITION "MD"
+#define HIGH_DEFINITION "HD"
 
 typedef struct {
   int client_socket;
+  char bitrate[3];  // To store the bitrate text (LD, MD, or HD)
 } client_data_t;
 
-void show_menu() {
+void show_menu(const char *bitrate) {
   printf("\nSelect an action:\n");
   printf("1. Play\n");
   printf("2. Pause\n");
   printf("3. Stop\n");
+  printf("4. Set Low Definition (LD)\n");
+  printf("5. Set Medium Definition (MD)\n");
+  printf("6. Set High Definition (HD)\n");
+  printf("Current bitrate: %s\n", bitrate);
 }
 
 void *handle_user_actions(void *arg) {
@@ -51,6 +56,24 @@ void *handle_user_actions(void *arg) {
     } else if (strcasecmp(buffer, "3") == 0) {
       close(client_socket);
       exit(EXIT_SUCCESS);
+    } else if (strcasecmp(buffer, "4") == 0) {
+      strcpy(client_data->bitrate, LOW_DEFINITION);
+      printf("Bitrate set to Low Definition (LD)\n");
+      if (send(client_socket, "LD", 2, 0) == -1) {
+        perror("Error sending LD to server");
+      }
+    } else if (strcasecmp(buffer, "5") == 0) {
+      strcpy(client_data->bitrate, MEDIUM_DEFINITION);
+      printf("Bitrate set to Medium Definition (MD)\n");
+      if (send(client_socket, "MD", 2, 0) == -1) {
+        perror("Error sending MD to server");
+      }
+    } else if (strcasecmp(buffer, "6") == 0) {
+      strcpy(client_data->bitrate, HIGH_DEFINITION);
+      printf("Bitrate set to High Definition (HD)\n");
+      if (send(client_socket, "HD", 2, 0) == -1) {
+        perror("Error sending HD to server");
+      }
     } else {
       printf("Invalid choice. Please choose a valid action.\n");
     }
@@ -92,7 +115,7 @@ void *handle_streaming(void *arg) {
     printf("\n%s\n", buffer);
     memset(buffer, 0, sizeof(buffer));
 
-    show_menu();
+    show_menu(client_data->bitrate);
   }
 
   return NULL;
@@ -134,11 +157,13 @@ int connect_to_server(const char *server_ip, int server_port) {
 int main(int argc, char *argv[]) {
   const char *server_ip = DEFAULT_SERVER_IP;
   int server_port = DEFAULT_SERVER_PORT;
-  int bitrate = LOW_DEFINITION;  // Default bitrate (Low Definition)
   int opt;
 
+  // Default bitrate is Low Definition
+  char bitrate[3] = "LD";
+
   // Parse command-line options
-  while ((opt = getopt(argc, argv, "i:p:b:")) != -1) {
+  while ((opt = getopt(argc, argv, "i:p:")) != -1) {
     switch (opt) {
       case 'i':  // Server IP
         server_ip = optarg;
@@ -150,27 +175,17 @@ int main(int argc, char *argv[]) {
           return EXIT_FAILURE;
         }
         break;
-      case 'b':  // Bitrate
-        bitrate = atoi(optarg);
-        if (bitrate < LOW_DEFINITION || bitrate > HIGH_DEFINITION) {
-          fprintf(stderr,
-                  "Error: Invalid bitrate. Choose between 1 (LD), 2 (MD), or 3 "
-                  "(HD).\n");
-          return EXIT_FAILURE;
-        }
-        break;
       default:
-        fprintf(stderr, "Usage: %s -i <server_ip> -p <port> -b <bitrate>\n",
-                argv[0]);
+        fprintf(stderr, "Usage: %s -i <server_ip> -p <port>\n", argv[0]);
         return EXIT_FAILURE;
     }
   }
 
   int client_socket = connect_to_server(server_ip, server_port);
 
-  // Send the selected bitrate to the server
-  if (send(client_socket, &bitrate, sizeof(bitrate), 0) == -1) {
-    perror("Error sending bitrate to server");
+  // Send the initial bitrate (LD) to the server
+  if (send(client_socket, "LD", 2, 0) == -1) {
+    perror("Error sending LD to server");
     close(client_socket);
     return EXIT_FAILURE;
   }
@@ -184,6 +199,7 @@ int main(int argc, char *argv[]) {
   }
 
   client_data->client_socket = client_socket;
+  strcpy(client_data->bitrate, bitrate);  // Set initial bitrate to LD
 
   pthread_t user_actions_thread, streaming_thread;
 
